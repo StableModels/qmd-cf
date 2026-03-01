@@ -76,5 +76,5 @@ The `./testing` sub-export provides mocks for consuming projects to test their Q
 ## Exports
 
 Two package entry points:
-- `@stablemodels/qmd-cf` — Main library (`Qmd` class, types, utilities)
+- `@stablemodels/qmd-cf` — Main library (`Qmd` class, domain types, utilities, and Cloudflare platform types: `SqlStorage`, `SqlStorageCursor`, `SqlStorageValue`)
 - `@stablemodels/qmd-cf/testing` — Test mocks (`MockSqlStorage`, `MockVectorize`, `createMockEmbedFn`)

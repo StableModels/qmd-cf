@@ -6,8 +6,8 @@
  * FTS5 runs co-located in the Durable Object's SQLite for zero-latency BM25 keyword search.
  * Optionally, Cloudflare Vectorize adds semantic vector search, fused via Reciprocal Rank Fusion.
  *
- * Cloudflare platform types (SqlStorage, Vectorize, VectorizeVector, etc.) are
- * ambient from @cloudflare/workers-types — consumers access them directly.
+ * Cloudflare platform types (SqlStorage, SqlStorageCursor, SqlStorageValue) are
+ * re-exported so consumers can import them without ambient globals.
  *
  * @example FTS-only (zero external dependencies)
  * ```ts
@@ -63,6 +63,18 @@ export type {
 	IndexStats,
 	EmbedFn,
 } from "./types.js";
+
+// Re-export Cloudflare platform types so consumers don't need ambient globals
+type _SqlStorage = SqlStorage;
+type _SqlStorageCursor<
+	T extends Record<string, SqlStorageValue> = Record<string, SqlStorageValue>,
+> = SqlStorageCursor<T>;
+type _SqlStorageValue = SqlStorageValue;
+export type {
+	_SqlStorage as SqlStorage,
+	_SqlStorageCursor as SqlStorageCursor,
+	_SqlStorageValue as SqlStorageValue,
+};
 
 // Utilities (useful for custom pipelines)
 export { chunkText } from "./chunker.js";
