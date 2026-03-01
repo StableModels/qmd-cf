@@ -10,7 +10,7 @@ FTS5 runs co-located in the DO's SQLite for zero-latency BM25 keyword search. Op
 npm install @stablemodels/qmd-cf
 ```
 
-Peer dependency: `@cloudflare/workers-types` (optional, for type checking).
+Peer dependency: `@cloudflare/workers-types` (optional). Core platform types (`SqlStorage`, `SqlStorageCursor`, `SqlStorageValue`) are re-exported from the main entry point, so most consumers don't need the peer dep at all.
 
 ## Usage
 

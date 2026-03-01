@@ -15,11 +15,7 @@
 	},
 	"main": "dist/index.js",
 	"types": "dist/index.d.ts",
-	"files": [
-		"dist",
-		"src",
-		"README.md"
-	],
+	"files": ["dist", "src", "README.md"],
 	"scripts": {
 		"build": "tsc",
 		"check": "biome check .",

@@ -43,7 +43,7 @@ A DO-native reimagination of [qmd](https://github.com/tobi/qmd). Brings hybrid B
 - **Smart chunking** — scored break point system: headings (100-50), code fences (80), HRs (60), paragraphs (20), list items (5), newlines (1). Squared distance decay prefers breaks closer to target. Avoids splitting inside fenced code blocks
 - **BM25 normalization** — `abs(raw) / (1 + abs(raw))` maps raw FTS5 scores to [0, 1) where higher = stronger match
 - **No runtime dependencies** — only `@cloudflare/workers-types` as a peer dep for types
-- **Real Cloudflare types** — programs against ambient CF types (`SqlStorage`, `Vectorize`) from `@cloudflare/workers-types` via tsconfig. Mocks in `./testing` are structurally compatible
+- **Real Cloudflare types** — programs against ambient CF types (`SqlStorage`, `Vectorize`) from `@cloudflare/workers-types` via tsconfig. Key types (`SqlStorage`, `SqlStorageCursor`, `SqlStorageValue`) are re-exported from `src/index.ts` so consumers don't need ambient globals. Mocks in `./testing` are structurally compatible
 - **Multilingual tokenizer** — FTS5 uses `unicode61` (no Porter stemmer), enabling language-neutral keyword search
 - **Multilingual embeddings** — `@cf/baai/bge-m3` supports 100+ languages (1024-dimensional vectors)
 - **Schema versioning** — `qmd_meta` tracks version (currently v2). Incremental migration support (v1 → v2 adds `content_hash` column + `qmd_contexts` table)
