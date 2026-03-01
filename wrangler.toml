@@ -1,0 +1,14 @@
+# Used by @cloudflare/vitest-pool-workers for runtime testing.
+# This library is not a Worker itself — consumers create their own DO wrapping Qmd.
+
+name = "qmd-cf-test"
+main = "tests/cf/qmd-object.ts"
+compatibility_date = "2025-03-01"
+
+[[durable_objects.bindings]]
+name = "QMD"
+class_name = "QmdObject"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["QmdObject"]
