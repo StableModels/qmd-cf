@@ -1,4 +1,4 @@
-# @ember/qmd-cf — Hybrid Search for Durable Objects
+# @stablemodels/qmd-cf — Hybrid Search for Durable Objects
 
 A DO-native reimagination of [qmd](https://github.com/tobi/qmd). Brings hybrid BM25 full-text + vector semantic search to Cloudflare Durable Objects.
 
@@ -43,7 +43,7 @@ A DO-native reimagination of [qmd](https://github.com/tobi/qmd). Brings hybrid B
 - **Smart chunking** — scored break point system: headings (100-50), code fences (80), HRs (60), paragraphs (20), list items (5), newlines (1). Squared distance decay prefers breaks closer to target. Avoids splitting inside fenced code blocks
 - **BM25 normalization** — `abs(raw) / (1 + abs(raw))` maps raw FTS5 scores to [0, 1) where higher = stronger match
 - **No runtime dependencies** — only `@cloudflare/workers-types` as a peer dep for types
-- **SqlStorage interface** — decouples from Cloudflare's exact API shape for testability
+- **Real Cloudflare types** — programs against ambient CF types (`SqlStorage`, `Vectorize`) from `@cloudflare/workers-types` via tsconfig. Mocks in `./testing` are structurally compatible
 - **Multilingual tokenizer** — FTS5 uses `unicode61` (no Porter stemmer), enabling language-neutral keyword search
 - **Multilingual embeddings** — `@cf/baai/bge-m3` supports 100+ languages (1024-dimensional vectors)
 - **Schema versioning** — `qmd_meta` tracks version (currently v2). Incremental migration support (v1 → v2 adds `content_hash` column + `qmd_contexts` table)
@@ -61,28 +61,20 @@ A DO-native reimagination of [qmd](https://github.com/tobi/qmd). Brings hybrid B
 | `src/rrf.ts` | Reciprocal Rank Fusion for hybrid result merging |
 | `src/chunker.ts` | Smart document chunking with scored break points + code fence awareness |
 | `src/hash.ts` | FNV-1a 32-bit hash for content change detection |
+| `src/testing.ts` | Mock implementations (`MockSqlStorage`, `MockVectorize`, `createMockEmbedFn`) for testing without CF runtime |
+| `src/bun-sqlite.d.ts` | Minimal bun:sqlite type declarations (avoids conflicts with `@cloudflare/workers-types` globals) |
 
-## Usage from Agent Package
+## Testing
 
-QMD is integrated into the agent's EmberAgent DO for auto-inject memory recall. The agent initializes QMD with hybrid FTS5 + Vectorize search in its constructor, indexes memory files on first activation, and queries QMD before each `streamText()` call to inject relevant context into the system prompt.
+Two-tier test strategy:
 
-```ts
-import { Qmd } from "@ember/qmd-cf";
+- **Unit tests** (`bun test tests/*.test.ts`) — 161 tests, ~200ms. Uses `MockSqlStorage` (bun:sqlite backed) and `MockVectorize` (in-memory cosine similarity). No Cloudflare runtime needed.
+- **Workerd tests** (`vitest run --config vitest.config.ts`) — 26 tests via `@cloudflare/vitest-pool-workers`. Runs in real workerd with actual `SqlStorage`. Tests the full DO integration path.
 
-// In DurableObject constructor (with optional Vectorize):
-this.qmd = new Qmd(ctx.storage.sql, {
-  vectorize: env.VECTORIZE,
-  embedFn: (texts) => env.AI.run("@cf/baai/bge-m3", { text: texts }).then(r => r.data),
-});
+The `./testing` sub-export provides mocks for consuming projects to test their Qmd integration without Cloudflare dependencies.
 
-// Set up contexts for path prefixes:
-this.qmd.setContext("life/areas/health/", "Health and wellness documents");
+## Exports
 
-// Index a document (skips if content unchanged):
-const { chunks, skipped } = await this.qmd.index({ id: "soul.md", content: "...", title: "Soul", docType: "identity" });
-
-// Search (uses strong signal probe in hybrid mode):
-const results = await this.qmd.search("what does the agent care about?");
-```
-
-The agent's `memory/indexing.ts` and `memory/recall.ts` modules handle the indexing lifecycle and search-to-prompt formatting.
+Two package entry points:
+- `@stablemodels/qmd-cf` — Main library (`Qmd` class, types, utilities)
+- `@stablemodels/qmd-cf/testing` — Test mocks (`MockSqlStorage`, `MockVectorize`, `createMockEmbedFn`)

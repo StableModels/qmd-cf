@@ -703,6 +703,17 @@ describe("Qmd", () => {
 			expect(contexts[2].prefix).toBe("life/areas/health/");
 		});
 
+		test("getContextsForDoc works with single-segment docId (no slashes)", () => {
+			const qmd = new Qmd(sql);
+			qmd.setContext("", "Root context");
+			qmd.setContext("life/", "Life context");
+
+			const contexts = qmd.getContextsForDoc("soul.md");
+			expect(contexts).toHaveLength(1);
+			expect(contexts[0].prefix).toBe("");
+			expect(contexts[0].description).toBe("Root context");
+		});
+
 		test("getContextsForDoc returns empty for no matching contexts", () => {
 			const qmd = new Qmd(sql);
 			qmd.setContext("work/", "Work stuff");

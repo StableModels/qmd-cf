@@ -256,6 +256,27 @@ describe("searchFts", () => {
 		expect(results[0].score).toBeLessThanOrEqual(1);
 	});
 
+	test("searches documents with NULL title", () => {
+		sql.exec(
+			"INSERT INTO qmd_documents (id, title, doc_type, namespace, metadata) VALUES (?, ?, ?, ?, ?)",
+			"doc1",
+			null,
+			null,
+			null,
+			null,
+		);
+		sql.exec(
+			"INSERT INTO qmd_chunks (doc_id, seq, content, char_offset) VALUES (?, 0, ?, 0)",
+			"doc1",
+			"hello world",
+		);
+
+		const results = searchFts(sql, "hello");
+		expect(results).toHaveLength(1);
+		expect(results[0].docId).toBe("doc1");
+		expect(results[0].title).toBeNull();
+	});
+
 	test("strong BM25 matches rank higher than weak ones", () => {
 		// Add enough documents for meaningful IDF
 		for (let i = 0; i < 20; i++) {
