@@ -1,6 +1,6 @@
 {
 	"name": "@stablemodels/qmd-cf",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"description": "Hybrid full-text + vector search for Cloudflare Durable Objects. A DO-native reimagination of qmd.",
 	"type": "module",
 	"exports": {

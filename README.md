@@ -10,7 +10,7 @@ FTS5 runs co-located in the DO's SQLite for zero-latency BM25 keyword search. Op
 npm install @stablemodels/qmd-cf
 ```
 
-Peer dependency: `@cloudflare/workers-types` (optional, for type checking).
+Peer dependency: `@cloudflare/workers-types` (optional). Core platform types (`SqlStorage`, `SqlStorageCursor`, `SqlStorageValue`) are re-exported from the main entry point, so most consumers don't need the peer dep at all.
 
 ## Usage
 
@@ -116,26 +116,24 @@ qmd.setContext("projects/web/", "Frontend web application docs");
 
 ## Testing
 
-The `@stablemodels/qmd-cf/testing` sub-export provides mocks for testing without Cloudflare services:
+The package provides test utilities via the `/testing` subpath:
 
 ```ts
+import { MockSqlStorage, createMockEmbedFn } from "@stablemodels/qmd-cf/testing";
 import { Qmd } from "@stablemodels/qmd-cf";
-import { MockSqlStorage, MockVectorize, createMockEmbedFn } from "@stablemodels/qmd-cf/testing";
 
-// FTS-only
-const qmd = new Qmd(new MockSqlStorage());
+const sql = new MockSqlStorage();
+const qmd = new Qmd(sql);
 
-// Hybrid
-const qmd = new Qmd(new MockSqlStorage(), {
-  vectorize: new MockVectorize(),
-  embedFn: createMockEmbedFn(),
-});
+await qmd.index({ id: "doc-1", content: "Hello world" });
+const results = qmd.searchFts("hello");
 
-await qmd.index({ id: "test", content: "hello world" });
-const results = await qmd.search("hello");
+sql.close();
 ```
 
-`MockSqlStorage` uses `bun:sqlite` in-memory with real FTS5. `MockVectorize` provides in-memory cosine similarity. Requires [Bun](https://bun.sh) as the test runner.
+`MockSqlStorage` is backed by `bun:sqlite` with real FTS5 support. `MockVectorize` provides in-memory vector search with brute-force cosine similarity. `createMockEmbedFn(dims?)` returns a deterministic embedding function for reproducible tests.
+
+Requires [Bun](https://bun.sh) as the test runner.
 
 ### Running the library's own tests
 
