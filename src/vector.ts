@@ -1,3 +1,4 @@
+import { safeParseMetadata } from "./namespace.js";
 import type { EmbedFn, SearchOptions, VectorResult } from "./types.js";
 
 /**
@@ -225,7 +226,7 @@ export async function searchVector(
 				title: row.title,
 				docType: row.doc_type,
 				namespace: row.namespace,
-				metadata: row.metadata ? JSON.parse(row.metadata as string) : null,
+				metadata: safeParseMetadata(row.metadata),
 			});
 		}
 	}

@@ -792,5 +792,265 @@ describe("Qmd", () => {
 			await qmd.search("testing software");
 			expect(vectorQueryCount).toBe(1);
 		});
+
+		test("uses custom strong signal thresholds from config", async () => {
+			const vectorize = new MockVectorize();
+			let vectorQueryCount = 0;
+			const origQuery = vectorize.query.bind(vectorize);
+			vectorize.query = async (...args: Parameters<typeof vectorize.query>) => {
+				vectorQueryCount++;
+				return origQuery(...args);
+			};
+
+			const embedFn = createMockEmbedFn();
+			// Set very high thresholds so strong signal is never triggered
+			const qmd = new Qmd(sql, {
+				vectorize,
+				embedFn,
+				config: { strongSignalMinScore: 0.99, strongSignalMinGap: 0.99 },
+			});
+
+			for (let i = 0; i < 50; i++) {
+				await qmd.index({
+					id: `filler${i}`,
+					content: `general document about topic ${i}`,
+				});
+			}
+			await qmd.index({
+				id: "unique",
+				content: "xyzzy xyzzy xyzzy xyzzy xyzzy xyzzy xyzzy",
+			});
+
+			vectorQueryCount = 0;
+			await qmd.search("xyzzy");
+			// Should NOT skip vector search because thresholds are very high
+			expect(vectorQueryCount).toBe(1);
+		});
+	});
+
+	describe("empty query handling", () => {
+		test("searchFts returns empty for empty query", async () => {
+			const qmd = new Qmd(sql);
+			await qmd.index({ id: "doc1", content: "Hello, world!" });
+			expect(qmd.searchFts("")).toEqual([]);
+			expect(qmd.searchFts("   ")).toEqual([]);
+		});
+
+		test("search returns empty for empty query", async () => {
+			const qmd = new Qmd(sql);
+			await qmd.index({ id: "doc1", content: "Hello, world!" });
+			expect(await qmd.search("")).toEqual([]);
+			expect(await qmd.search("   ")).toEqual([]);
+		});
+
+		test("searchVector returns empty for empty query", async () => {
+			const vectorize = new MockVectorize();
+			const embedFn = createMockEmbedFn();
+			const qmd = new Qmd(sql, { vectorize, embedFn });
+			await qmd.index({ id: "doc1", content: "Hello, world!" });
+			expect(await qmd.searchVector("")).toEqual([]);
+		});
+	});
+
+	describe("content reconstruction fidelity", () => {
+		test("get() accurately reconstructs content from overlapping chunks", async () => {
+			const qmd = new Qmd(sql, {
+				config: { chunkSize: 100, chunkOverlap: 20 },
+			});
+			const original = "The quick brown fox jumps over the lazy dog. ".repeat(
+				10,
+			);
+			await qmd.index({ id: "doc1", content: original });
+
+			const doc = qmd.get("doc1");
+			expect(doc).not.toBeNull();
+			// Content should be exactly or very close to the original
+			expect(doc?.content).toBe(original);
+		});
+
+		test("get() returns exact content for single-chunk documents", async () => {
+			const qmd = new Qmd(sql);
+			const original = "Short content.";
+			await qmd.index({ id: "doc1", content: original });
+
+			const doc = qmd.get("doc1");
+			expect(doc?.content).toBe(original);
+		});
+	});
+
+	describe("vector count tracking", () => {
+		test("stats() tracks vector count after indexing", async () => {
+			const vectorize = new MockVectorize();
+			const embedFn = createMockEmbedFn();
+			const qmd = new Qmd(sql, { vectorize, embedFn });
+
+			await qmd.index({ id: "doc1", content: "Hello, world!" });
+			const stats = qmd.stats();
+			expect(stats.totalVectors).toBe(1);
+		});
+
+		test("stats() decrements vector count after removal", async () => {
+			const vectorize = new MockVectorize();
+			const embedFn = createMockEmbedFn();
+			const qmd = new Qmd(sql, { vectorize, embedFn });
+
+			await qmd.index({ id: "doc1", content: "Hello, world!" });
+			await qmd.index({ id: "doc2", content: "Goodbye, world!" });
+			expect(qmd.stats().totalVectors).toBe(2);
+
+			await qmd.remove("doc1");
+			expect(qmd.stats().totalVectors).toBe(1);
+		});
+
+		test("stats() returns 0 vectors in FTS-only mode", () => {
+			const qmd = new Qmd(sql);
+			expect(qmd.stats().totalVectors).toBe(0);
+		});
+
+		test("stats() adjusts vector count on content change", async () => {
+			const vectorize = new MockVectorize();
+			const embedFn = createMockEmbedFn();
+			const qmd = new Qmd(sql, {
+				vectorize,
+				embedFn,
+				config: { chunkSize: 50, chunkOverlap: 5 },
+			});
+
+			await qmd.index({ id: "doc1", content: "short" });
+			expect(qmd.stats().totalVectors).toBe(1);
+
+			// Re-index with longer content that produces more chunks
+			await qmd.index({ id: "doc1", content: "word ".repeat(40) });
+			const stats = qmd.stats();
+			expect(stats.totalVectors).toBeGreaterThan(1);
+			expect(stats.totalVectors).toBe(stats.totalChunks);
+		});
+	});
+
+	describe("maxChunksPerDocument", () => {
+		test("throws when chunk count exceeds limit", async () => {
+			const qmd = new Qmd(sql, {
+				config: { chunkSize: 50, chunkOverlap: 5, maxChunksPerDocument: 2 },
+			});
+
+			await expect(
+				qmd.index({ id: "doc1", content: "word ".repeat(100) }),
+			).rejects.toThrow("exceeding maxChunksPerDocument");
+		});
+
+		test("allows documents within chunk limit", async () => {
+			const qmd = new Qmd(sql, {
+				config: { chunkSize: 50, chunkOverlap: 5, maxChunksPerDocument: 100 },
+			});
+
+			const result = await qmd.index({
+				id: "doc1",
+				content: "word ".repeat(40),
+			});
+			expect(result.chunks).toBeGreaterThan(1);
+			expect(result.chunks).toBeLessThanOrEqual(100);
+		});
+
+		test("no limit when maxChunksPerDocument is 0 (default)", async () => {
+			const qmd = new Qmd(sql, {
+				config: { chunkSize: 50, chunkOverlap: 5 },
+			});
+
+			// Should not throw even with many chunks
+			const result = await qmd.index({
+				id: "doc1",
+				content: "word ".repeat(100),
+			});
+			expect(result.chunks).toBeGreaterThan(2);
+		});
+
+		test("indexBatch throws when chunk count exceeds limit", async () => {
+			const qmd = new Qmd(sql, {
+				config: { chunkSize: 50, chunkOverlap: 5, maxChunksPerDocument: 2 },
+			});
+
+			await expect(
+				qmd.indexBatch([
+					{ id: "small", content: "short" },
+					{ id: "big", content: "word ".repeat(100) },
+				]),
+			).rejects.toThrow("exceeding maxChunksPerDocument");
+		});
+	});
+
+	describe("indexBatch vector count tracking", () => {
+		test("tracks vector count across batch of new documents", async () => {
+			const vectorize = new MockVectorize();
+			const embedFn = createMockEmbedFn();
+			const qmd = new Qmd(sql, { vectorize, embedFn });
+
+			await qmd.indexBatch([
+				{ id: "doc1", content: "Hello world" },
+				{ id: "doc2", content: "Goodbye world" },
+			]);
+
+			expect(qmd.stats().totalVectors).toBe(2);
+		});
+
+		test("adjusts vector count when batch re-indexes changed content", async () => {
+			const vectorize = new MockVectorize();
+			const embedFn = createMockEmbedFn();
+			const qmd = new Qmd(sql, {
+				vectorize,
+				embedFn,
+				config: { chunkSize: 50, chunkOverlap: 5 },
+			});
+
+			await qmd.indexBatch([
+				{ id: "doc1", content: "short" },
+				{ id: "doc2", content: "also short" },
+			]);
+			expect(qmd.stats().totalVectors).toBe(2);
+
+			// Re-index doc1 with longer content (more chunks), doc2 unchanged
+			await qmd.indexBatch([
+				{ id: "doc1", content: "word ".repeat(40) },
+				{ id: "doc2", content: "also short" },
+			]);
+			const stats = qmd.stats();
+			expect(stats.totalVectors).toBeGreaterThan(2);
+			// doc2 skipped, doc1 re-indexed with more chunks
+			expect(stats.totalVectors).toBe(stats.totalChunks);
+		});
+	});
+
+	describe("remove nonexistent document with vectors", () => {
+		test("does not affect vector count when removing nonexistent doc", async () => {
+			const vectorize = new MockVectorize();
+			const embedFn = createMockEmbedFn();
+			const qmd = new Qmd(sql, { vectorize, embedFn });
+
+			await qmd.index({ id: "doc1", content: "Hello world" });
+			expect(qmd.stats().totalVectors).toBe(1);
+
+			await qmd.remove("nonexistent");
+			expect(qmd.stats().totalVectors).toBe(1);
+		});
+	});
+
+	describe("corrupted metadata handling", () => {
+		test("searchFts returns null metadata for corrupted JSON", async () => {
+			const qmd = new Qmd(sql);
+			// Insert a document with valid metadata first to initialize schema
+			await qmd.index({
+				id: "doc1",
+				content: "hello world",
+				metadata: { key: "value" },
+			});
+
+			// Corrupt the metadata directly in the database
+			sql.exec(
+				"UPDATE qmd_documents SET metadata = '{invalid json' WHERE id = 'doc1'",
+			);
+
+			const results = qmd.searchFts("hello");
+			expect(results).toHaveLength(1);
+			expect(results[0].metadata).toBeNull();
+		});
 	});
 });

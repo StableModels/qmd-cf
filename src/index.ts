@@ -80,5 +80,6 @@ export type {
 export { chunkText } from "./chunker.js";
 export { buildFts5Query } from "./fts.js";
 export { fnv1a32 } from "./hash.js";
+export { buildNamespaceFilter, safeParseMetadata } from "./namespace.js";
 export { reciprocalRankFusion } from "./rrf.js";
 export { formatDocForEmbedding, formatQueryForEmbedding } from "./vector.js";
