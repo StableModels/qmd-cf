@@ -1,3 +1,4 @@
+import { buildNamespaceFilter } from "./namespace.js";
 import type { FtsResult, SearchOptions } from "./types.js";
 
 /**
@@ -33,9 +34,9 @@ export function buildFts5Query(query: string): string {
 }
 
 /**
- * Normalize a raw BM25 score to (0, 1].
+ * Normalize a raw BM25 score to (0, 1).
  * SQLite FTS5 bm25() returns negative values where lower (more negative) = better match.
- * We convert to: score = 1 / (1 + abs(raw))
+ * We convert to: score = abs(raw) / (1 + abs(raw))
  */
 function normalizeBm25(raw: number): number {
 	return Math.abs(raw) / (1 + Math.abs(raw));
@@ -75,14 +76,9 @@ export function searchFts(
 		bindings.push(options.docType);
 	}
 	if (options.namespace) {
-		if (options.namespace.includes("*")) {
-			const prefix = options.namespace.replace(/\*+$/, "").replace(/\/+$/, "");
-			filters.push("d.namespace LIKE ?");
-			bindings.push(`${prefix}/%`);
-		} else {
-			filters.push("d.namespace = ?");
-			bindings.push(options.namespace);
-		}
+		const nsFilter = buildNamespaceFilter(options.namespace, "d.namespace");
+		filters.push(nsFilter.clause);
+		bindings.push(nsFilter.binding);
 	}
 
 	const whereClause = filters.length > 0 ? `AND ${filters.join(" AND ")}` : "";
@@ -121,6 +117,16 @@ export function searchFts(
 		const existing = seen.get(row.doc_id);
 
 		if (!existing || score > existing.score) {
+			let metadata: Record<string, string | number | boolean | null> | null =
+				null;
+			if (row.metadata) {
+				try {
+					metadata = JSON.parse(row.metadata as string);
+				} catch {
+					// Corrupted metadata — return null rather than crashing search
+					metadata = null;
+				}
+			}
 			seen.set(row.doc_id, {
 				docId: row.doc_id,
 				score,
@@ -129,7 +135,7 @@ export function searchFts(
 				title: row.title,
 				docType: row.doc_type,
 				namespace: row.namespace,
-				metadata: row.metadata ? JSON.parse(row.metadata as string) : null,
+				metadata,
 			});
 		}
 	}

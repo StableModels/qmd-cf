@@ -1,6 +1,7 @@
 import { chunkText } from "./chunker.js";
 import { searchFts } from "./fts.js";
 import { fnv1a32 } from "./hash.js";
+import { buildNamespaceFilter } from "./namespace.js";
 import { reciprocalRankFusion } from "./rrf.js";
 import { initSchema } from "./schema.js";
 import type {
@@ -16,10 +17,10 @@ import type {
 } from "./types.js";
 import { indexVectors, removeVectors, searchVector } from "./vector.js";
 
-/** Minimum normalized BM25 score to consider a "strong signal". */
-const STRONG_SIGNAL_MIN_SCORE = 0.85;
-/** Minimum gap between top-1 and top-2 BM25 scores for strong signal. */
-const STRONG_SIGNAL_MIN_GAP = 0.15;
+/** Default minimum normalized BM25 score to consider a "strong signal". */
+const DEFAULT_STRONG_SIGNAL_MIN_SCORE = 0.85;
+/** Default minimum gap between top-1 and top-2 BM25 scores for strong signal. */
+const DEFAULT_STRONG_SIGNAL_MIN_GAP = 0.15;
 
 /**
  * Qmd — Hybrid full-text + vector search for Cloudflare Durable Objects.
@@ -75,6 +76,12 @@ export class Qmd {
 			chunkSize: options?.config?.chunkSize ?? 3200,
 			chunkOverlap: options?.config?.chunkOverlap ?? 480,
 			tokenizer: options?.config?.tokenizer ?? "unicode61",
+			strongSignalMinScore:
+				options?.config?.strongSignalMinScore ??
+				DEFAULT_STRONG_SIGNAL_MIN_SCORE,
+			strongSignalMinGap:
+				options?.config?.strongSignalMinGap ?? DEFAULT_STRONG_SIGNAL_MIN_GAP,
+			maxChunksPerDocument: options?.config?.maxChunksPerDocument ?? 0,
 		};
 	}
 
@@ -133,7 +140,20 @@ export class Qmd {
 			return { chunks: chunkCount, skipped: true };
 		}
 
+		// Remove old vectors before deleting chunks (needs chunk seq numbers)
+		let oldChunkCount = 0;
+		if (this.vectorize && existing.length > 0) {
+			oldChunkCount = this.sql
+				.exec<{ cnt: number }>(
+					"SELECT COUNT(*) as cnt FROM qmd_chunks WHERE doc_id = ?",
+					doc.id,
+				)
+				.one().cnt;
+			await removeVectors(this.vectorize, this.sql, doc.id);
+		}
+
 		// Upsert document metadata with content hash
+		// Note: INSERT OR REPLACE cascades to delete old chunks via FK, so this also cleans up FTS
 		this.sql.exec(
 			`INSERT OR REPLACE INTO qmd_documents (id, title, doc_type, namespace, metadata, content_hash, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`,
@@ -145,7 +165,7 @@ export class Qmd {
 			contentHash,
 		);
 
-		// Delete old chunks (triggers will clean up FTS)
+		// Delete any remaining old chunks (triggers will clean up FTS)
 		this.sql.exec("DELETE FROM qmd_chunks WHERE doc_id = ?", doc.id);
 
 		// Chunk and insert
@@ -155,6 +175,15 @@ export class Qmd {
 			this.config.chunkSize,
 			this.config.chunkOverlap,
 		);
+
+		if (
+			this.config.maxChunksPerDocument > 0 &&
+			chunks.length > this.config.maxChunksPerDocument
+		) {
+			throw new Error(
+				`Document "${doc.id}" produced ${chunks.length} chunks, exceeding maxChunksPerDocument (${this.config.maxChunksPerDocument})`,
+			);
+		}
 
 		for (const chunk of chunks) {
 			this.sql.exec(
@@ -184,6 +213,7 @@ export class Qmd {
 					context: contextText || undefined,
 				})),
 			);
+			this.adjustVectorCount(chunks.length - oldChunkCount);
 		}
 
 		return { chunks: chunks.length, skipped: false };
@@ -201,6 +231,7 @@ export class Qmd {
 
 		let totalChunks = 0;
 		let skippedCount = 0;
+		let oldVectorCount = 0;
 		const allVectorChunks: Array<{
 			docId: string;
 			seq: number;
@@ -245,6 +276,18 @@ export class Qmd {
 				continue;
 			}
 
+			// Remove old vectors before INSERT OR REPLACE (which cascades chunk deletion)
+			if (this.vectorize && existing.length > 0) {
+				const oldCount = this.sql
+					.exec<{ cnt: number }>(
+						"SELECT COUNT(*) as cnt FROM qmd_chunks WHERE doc_id = ?",
+						doc.id,
+					)
+					.one().cnt;
+				oldVectorCount += oldCount;
+				await removeVectors(this.vectorize, this.sql, doc.id);
+			}
+
 			this.sql.exec(
 				`INSERT OR REPLACE INTO qmd_documents (id, title, doc_type, namespace, metadata, content_hash, updated_at)
 				 VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`,
@@ -264,6 +307,15 @@ export class Qmd {
 				this.config.chunkSize,
 				this.config.chunkOverlap,
 			);
+
+			if (
+				this.config.maxChunksPerDocument > 0 &&
+				chunks.length > this.config.maxChunksPerDocument
+			) {
+				throw new Error(
+					`Document "${doc.id}" produced ${chunks.length} chunks, exceeding maxChunksPerDocument (${this.config.maxChunksPerDocument})`,
+				);
+			}
 
 			for (const chunk of chunks) {
 				this.sql.exec(
@@ -298,6 +350,7 @@ export class Qmd {
 		// Batch embed and upsert vectors
 		if (this.vectorize && this.embedFn && allVectorChunks.length > 0) {
 			await indexVectors(this.vectorize, this.embedFn, allVectorChunks);
+			this.adjustVectorCount(allVectorChunks.length - oldVectorCount);
 		}
 
 		return {
@@ -314,7 +367,15 @@ export class Qmd {
 	async remove(docId: string): Promise<void> {
 		this.ensureInit();
 
+		// Count chunks before removal for vector count tracking
+		let removedVectorCount = 0;
 		if (this.vectorize) {
+			removedVectorCount = this.sql
+				.exec<{ cnt: number }>(
+					"SELECT COUNT(*) as cnt FROM qmd_chunks WHERE doc_id = ?",
+					docId,
+				)
+				.one().cnt;
 			await removeVectors(this.vectorize, this.sql, docId);
 		}
 
@@ -322,6 +383,10 @@ export class Qmd {
 		this.sql.exec("DELETE FROM qmd_chunks WHERE doc_id = ?", docId);
 		// Delete document
 		this.sql.exec("DELETE FROM qmd_documents WHERE id = ?", docId);
+
+		if (this.vectorize && removedVectorCount > 0) {
+			this.adjustVectorCount(-removedVectorCount);
+		}
 	}
 
 	/**
@@ -330,6 +395,7 @@ export class Qmd {
 	 */
 	searchFts(query: string, options?: SearchOptions): FtsResult[] {
 		this.ensureInit();
+		if (!query?.trim()) return [];
 		return searchFts(this.sql, query, options);
 	}
 
@@ -347,6 +413,7 @@ export class Qmd {
 			);
 		}
 		this.ensureInit();
+		if (!query?.trim()) return [];
 		return searchVector(this.vectorize, this.embedFn, this.sql, query, options);
 	}
 
@@ -363,6 +430,7 @@ export class Qmd {
 		options?: HybridSearchOptions,
 	): Promise<SearchResult[]> {
 		this.ensureInit();
+		if (!query?.trim()) return [];
 
 		const limit = options?.limit ?? 10;
 		// Fetch more from each source for better fusion
@@ -399,8 +467,8 @@ export class Qmd {
 			const secondScore = ftsResults.length >= 2 ? ftsResults[1].score : 0;
 
 			if (
-				topScore >= STRONG_SIGNAL_MIN_SCORE &&
-				topScore - secondScore >= STRONG_SIGNAL_MIN_GAP
+				topScore >= this.config.strongSignalMinScore &&
+				topScore - secondScore >= this.config.strongSignalMinGap
 			) {
 				return ftsResults.slice(0, limit).map((r) => ({
 					docId: r.docId,
@@ -457,16 +525,34 @@ export class Qmd {
 		if (doc.length === 0) return null;
 
 		const chunks = this.sql
-			.exec<{ content: string }>(
-				"SELECT content FROM qmd_chunks WHERE doc_id = ? ORDER BY seq",
+			.exec<{ content: string; char_offset: number }>(
+				"SELECT content, char_offset FROM qmd_chunks WHERE doc_id = ? ORDER BY seq",
 				docId,
 			)
 			.toArray();
 
-		// Reconstruct content from chunks (overlap means we can't just concatenate)
-		// For now, return the first chunk's full text + subsequent chunks' non-overlapping portions
-		// This is an approximation — exact reconstruction would need char_offset tracking
-		const content = chunks.map((c) => c.content).join("\n\n");
+		// Reconstruct content using char_offset to handle overlap correctly.
+		// Each chunk's char_offset marks where it starts in the original document.
+		// We take each chunk's content from where the previous chunk left off.
+		let content: string;
+		if (chunks.length === 0) {
+			content = "";
+		} else if (chunks.length === 1) {
+			content = chunks[0].content;
+		} else {
+			const parts: string[] = [chunks[0].content];
+			for (let i = 1; i < chunks.length; i++) {
+				const prevEnd =
+					chunks[i - 1].char_offset + chunks[i - 1].content.length;
+				const curStart = chunks[i].char_offset;
+				// How far into this chunk does the non-overlapping portion start?
+				const skipChars = Math.max(0, prevEnd - curStart);
+				if (skipChars < chunks[i].content.length) {
+					parts.push(chunks[i].content.slice(skipChars));
+				}
+			}
+			content = parts.join("");
+		}
 
 		return {
 			content,
@@ -534,17 +620,9 @@ export class Qmd {
 	}> {
 		this.ensureInit();
 
-		let whereClause: string;
-		let binding: string;
-
-		if (pattern.includes("*")) {
-			const prefix = pattern.replace(/\*+$/, "").replace(/\/+$/, "");
-			whereClause = "d.namespace LIKE ?";
-			binding = `${prefix}/%`;
-		} else {
-			whereClause = "d.namespace = ?";
-			binding = pattern;
-		}
+		const nsFilter = buildNamespaceFilter(pattern, "d.namespace");
+		const whereClause = nsFilter.clause;
+		const binding = nsFilter.binding;
 
 		const rows = this.sql
 			.exec<{
@@ -602,10 +680,17 @@ export class Qmd {
 			.toArray()
 			.map((r) => r.doc_type);
 
+		const vectorCount = this.sql
+			.exec<{ version: number }>(
+				"SELECT version FROM qmd_meta WHERE key = 'vector_count'",
+			)
+			.toArray();
+		const totalVectors = vectorCount.length > 0 ? vectorCount[0].version : 0;
+
 		return {
 			totalDocuments: docCount,
 			totalChunks: chunkCount,
-			totalVectors: 0, // Can't query Vectorize count from binding
+			totalVectors,
 			namespaces,
 			docTypes,
 		};
@@ -678,6 +763,21 @@ export class Qmd {
 	 * returns contexts at "", "life/", "life/areas/", "life/areas/health/".
 	 * Results ordered from most general to most specific.
 	 */
+	/** Adjust the tracked vector count by a delta (positive for adds, negative for removes). */
+	private adjustVectorCount(delta: number): void {
+		const existing = this.sql
+			.exec<{ version: number }>(
+				"SELECT version FROM qmd_meta WHERE key = 'vector_count'",
+			)
+			.toArray();
+		const current = existing.length > 0 ? existing[0].version : 0;
+		const newCount = Math.max(0, current + delta);
+		this.sql.exec(
+			"INSERT OR REPLACE INTO qmd_meta (key, version) VALUES ('vector_count', ?)",
+			newCount,
+		);
+	}
+
 	getContextsForDoc(
 		docId: string,
 	): Array<{ prefix: string; description: string }> {

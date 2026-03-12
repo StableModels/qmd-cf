@@ -37,7 +37,7 @@ export interface Chunk {
 /** A search result returned from BM25 full-text search. */
 export interface FtsResult {
 	docId: string;
-	/** BM25 score normalized to (0, 1] — higher is better. */
+	/** BM25 score normalized to (0, 1) — higher is better. */
 	score: number;
 	/** The matching chunk text (snippet). */
 	snippet: string;
@@ -109,6 +109,12 @@ export interface QmdConfig {
 	chunkOverlap?: number;
 	/** FTS5 tokenizer configuration. Default: "unicode61". */
 	tokenizer?: string;
+	/** Minimum normalized BM25 score to consider a "strong signal" and skip vector search. Default: 0.85. */
+	strongSignalMinScore?: number;
+	/** Minimum gap between top-1 and top-2 BM25 scores for strong signal detection. Default: 0.15. */
+	strongSignalMinGap?: number;
+	/** Maximum chunks allowed per document. Throws if exceeded. Default: unlimited (0). */
+	maxChunksPerDocument?: number;
 }
 
 /** Embedding function signature — maps text to a vector. */

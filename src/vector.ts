@@ -215,6 +215,16 @@ export async function searchVector(
 		const row = chunkMap.get(`${key.docId}_${key.seq}`);
 		if (!row) continue;
 
+		let metadata: Record<string, string | number | boolean | null> | null =
+			null;
+		if (row.metadata) {
+			try {
+				metadata = JSON.parse(row.metadata as string);
+			} catch {
+				// Corrupted metadata — return null rather than crashing search
+				metadata = null;
+			}
+		}
 		const existing = seen.get(key.docId);
 		if (!existing || key.score > existing.score) {
 			seen.set(key.docId, {
@@ -225,7 +235,7 @@ export async function searchVector(
 				title: row.title,
 				docType: row.doc_type,
 				namespace: row.namespace,
-				metadata: row.metadata ? JSON.parse(row.metadata as string) : null,
+				metadata,
 			});
 		}
 	}
