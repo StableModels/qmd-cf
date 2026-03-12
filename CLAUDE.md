@@ -75,7 +75,7 @@ A DO-native reimagination of [qmd](https://github.com/tobi/qmd). Brings hybrid B
 
 Two-tier test strategy:
 
-- **Unit tests** (`bun test tests/*.test.ts`) — 161 tests, ~200ms. Uses `MockSqlStorage` (bun:sqlite backed) and `MockVectorize` (in-memory cosine similarity). No Cloudflare runtime needed.
+- **Unit tests** (`bun test tests/*.test.ts`) — 181 tests, ~200ms. Uses `MockSqlStorage` (bun:sqlite backed) and `MockVectorize` (in-memory cosine similarity). No Cloudflare runtime needed.
 - **Workerd tests** (`vitest run --config vitest.config.ts`) — 26 tests via `@cloudflare/vitest-pool-workers`. Runs in real workerd with actual `SqlStorage`. Tests the full DO integration path.
 
 The `./testing` sub-export provides mocks for consuming projects to test their Qmd integration without Cloudflare dependencies.

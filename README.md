@@ -73,7 +73,7 @@ await qmd.indexBatch(docs);
 await qmd.remove("doc.md");
 ```
 
-Documents support optional `title`, `docType`, `namespace`, and `metadata` fields. Content hashing skips re-indexing when content is unchanged.
+Documents support optional `title`, `docType`, `namespace`, and `metadata` fields. Content hashing skips re-indexing when content is unchanged. Use `maxChunksPerDocument` in config to guard against extremely large documents.
 
 ### Searching
 
@@ -103,6 +103,20 @@ qmd.list({ namespace: "projects" });   // List document IDs
 qmd.listByNamespace("projects/*");     // List docs by namespace pattern
 qmd.stats();                           // Index statistics
 qmd.rebuild();                         // Rebuild FTS index
+```
+
+### Configuration
+
+```ts
+const qmd = new Qmd(ctx.storage.sql, {
+  config: {
+    chunkSize: 3200,          // Max chars per chunk (default: 3200)
+    chunkOverlap: 480,        // Overlap between chunks (default: 480)
+    strongSignalMinScore: 0.85, // BM25 score threshold to skip vector search (default: 0.85)
+    strongSignalMinGap: 0.15,   // Min gap between top-1 and top-2 scores (default: 0.15)
+    maxChunksPerDocument: 0,    // Max chunks per doc, 0 = unlimited (default: 0)
+  },
+});
 ```
 
 ### Contexts
