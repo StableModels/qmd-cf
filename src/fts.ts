@@ -1,4 +1,4 @@
-import { buildNamespaceFilter } from "./namespace.js";
+import { buildNamespaceFilter, safeParseMetadata } from "./namespace.js";
 import type { FtsResult, SearchOptions } from "./types.js";
 
 /**
@@ -117,16 +117,6 @@ export function searchFts(
 		const existing = seen.get(row.doc_id);
 
 		if (!existing || score > existing.score) {
-			let metadata: Record<string, string | number | boolean | null> | null =
-				null;
-			if (row.metadata) {
-				try {
-					metadata = JSON.parse(row.metadata as string);
-				} catch {
-					// Corrupted metadata — return null rather than crashing search
-					metadata = null;
-				}
-			}
 			seen.set(row.doc_id, {
 				docId: row.doc_id,
 				score,
@@ -135,7 +125,7 @@ export function searchFts(
 				title: row.title,
 				docType: row.doc_type,
 				namespace: row.namespace,
-				metadata,
+				metadata: safeParseMetadata(row.metadata),
 			});
 		}
 	}

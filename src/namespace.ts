@@ -1,4 +1,18 @@
 /**
+ * Safely parse a JSON metadata string, returning null on invalid JSON.
+ */
+export function safeParseMetadata(
+	raw: string | null,
+): Record<string, string | number | boolean | null> | null {
+	if (!raw) return null;
+	try {
+		return JSON.parse(raw);
+	} catch {
+		return null;
+	}
+}
+
+/**
  * Build a SQL WHERE clause fragment for namespace filtering.
  * Standardizes namespace matching between FTS and vector search.
  *

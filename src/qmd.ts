@@ -92,6 +92,28 @@ export class Qmd {
 		this.initialized = true;
 	}
 
+	/** Count chunks for a document. */
+	private getChunkCount(docId: string): number {
+		return this.sql
+			.exec<{ cnt: number }>(
+				"SELECT COUNT(*) as cnt FROM qmd_chunks WHERE doc_id = ?",
+				docId,
+			)
+			.one().cnt;
+	}
+
+	/** Adjust the tracked vector count by a delta (positive for adds, negative for removes). */
+	private adjustVectorCount(delta: number): void {
+		// Initialize with 0 if not yet tracked, then update atomically
+		this.sql.exec(
+			"INSERT OR IGNORE INTO qmd_meta (key, version) VALUES ('vector_count', 0)",
+		);
+		this.sql.exec(
+			"UPDATE qmd_meta SET version = MAX(0, version + ?) WHERE key = 'vector_count'",
+			delta,
+		);
+	}
+
 	/** Whether vector search is available. */
 	get hasVectorSearch(): boolean {
 		return this.vectorize !== null && this.embedFn !== null;
@@ -131,24 +153,13 @@ export class Qmd {
 				metadataJson,
 				doc.id,
 			);
-			const chunkCount = this.sql
-				.exec<{ cnt: number }>(
-					"SELECT COUNT(*) as cnt FROM qmd_chunks WHERE doc_id = ?",
-					doc.id,
-				)
-				.one().cnt;
-			return { chunks: chunkCount, skipped: true };
+			return { chunks: this.getChunkCount(doc.id), skipped: true };
 		}
 
 		// Remove old vectors before deleting chunks (needs chunk seq numbers)
 		let oldChunkCount = 0;
 		if (this.vectorize && existing.length > 0) {
-			oldChunkCount = this.sql
-				.exec<{ cnt: number }>(
-					"SELECT COUNT(*) as cnt FROM qmd_chunks WHERE doc_id = ?",
-					doc.id,
-				)
-				.one().cnt;
+			oldChunkCount = this.getChunkCount(doc.id);
 			await removeVectors(this.vectorize, this.sql, doc.id);
 		}
 
@@ -265,26 +276,14 @@ export class Qmd {
 					metadataJson,
 					doc.id,
 				);
-				const chunkCount = this.sql
-					.exec<{ cnt: number }>(
-						"SELECT COUNT(*) as cnt FROM qmd_chunks WHERE doc_id = ?",
-						doc.id,
-					)
-					.one().cnt;
-				totalChunks += chunkCount;
+				totalChunks += this.getChunkCount(doc.id);
 				skippedCount++;
 				continue;
 			}
 
 			// Remove old vectors before INSERT OR REPLACE (which cascades chunk deletion)
 			if (this.vectorize && existing.length > 0) {
-				const oldCount = this.sql
-					.exec<{ cnt: number }>(
-						"SELECT COUNT(*) as cnt FROM qmd_chunks WHERE doc_id = ?",
-						doc.id,
-					)
-					.one().cnt;
-				oldVectorCount += oldCount;
+				oldVectorCount += this.getChunkCount(doc.id);
 				await removeVectors(this.vectorize, this.sql, doc.id);
 			}
 
@@ -368,25 +367,18 @@ export class Qmd {
 		this.ensureInit();
 
 		// Count chunks before removal for vector count tracking
-		let removedVectorCount = 0;
 		if (this.vectorize) {
-			removedVectorCount = this.sql
-				.exec<{ cnt: number }>(
-					"SELECT COUNT(*) as cnt FROM qmd_chunks WHERE doc_id = ?",
-					docId,
-				)
-				.one().cnt;
-			await removeVectors(this.vectorize, this.sql, docId);
+			const removedVectorCount = this.getChunkCount(docId);
+			if (removedVectorCount > 0) {
+				await removeVectors(this.vectorize, this.sql, docId);
+				this.adjustVectorCount(-removedVectorCount);
+			}
 		}
 
 		// Delete chunks (FTS cleanup via trigger)
 		this.sql.exec("DELETE FROM qmd_chunks WHERE doc_id = ?", docId);
 		// Delete document
 		this.sql.exec("DELETE FROM qmd_documents WHERE id = ?", docId);
-
-		if (this.vectorize && removedVectorCount > 0) {
-			this.adjustVectorCount(-removedVectorCount);
-		}
 	}
 
 	/**
@@ -763,21 +755,6 @@ export class Qmd {
 	 * returns contexts at "", "life/", "life/areas/", "life/areas/health/".
 	 * Results ordered from most general to most specific.
 	 */
-	/** Adjust the tracked vector count by a delta (positive for adds, negative for removes). */
-	private adjustVectorCount(delta: number): void {
-		const existing = this.sql
-			.exec<{ version: number }>(
-				"SELECT version FROM qmd_meta WHERE key = 'vector_count'",
-			)
-			.toArray();
-		const current = existing.length > 0 ? existing[0].version : 0;
-		const newCount = Math.max(0, current + delta);
-		this.sql.exec(
-			"INSERT OR REPLACE INTO qmd_meta (key, version) VALUES ('vector_count', ?)",
-			newCount,
-		);
-	}
-
 	getContextsForDoc(
 		docId: string,
 	): Array<{ prefix: string; description: string }> {
